@@ -1,3 +1,12 @@
+<div align="center">
+<svg class="logo-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <circle cx="256" cy="256" r="200" fill="black"></circle>
+  <circle cx="256" cy="256" r="210" stroke="#0CE4FF" stroke-width="18" fill="none"></circle>
+  <path d="M256 256 m-120 0 a120 120 0 1 1 240 0 a90 90 0 1 0 -180 0 a60 60 0 1 1 120 0 a30 30 0 1 0 -60 0" stroke="#FFD400" stroke-width="22" stroke-linecap="round" fill="none"></path>
+  <text x="256" y="355" text-anchor="middle" font-family="monospace" font-size="96" font-weight="900" letter-spacing="10" fill="#0CE4FF">JJFS</text>
+</svg>
+</div>
+
 # JJFS — JavaScript Journaling File System
 
 A universal, zero-dependency library for managing in-memory file system trees in JavaScript. Works in any browser (ES modules) or in Node.js without modification.
