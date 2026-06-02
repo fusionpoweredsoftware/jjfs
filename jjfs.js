@@ -30,6 +30,7 @@ export function jjfsNavigate(workspace, pathStr) {
 //   :N:M    → lines N through M (1-indexed, inclusive)
 //   :cN     → from character N to end of file
 //   :cN:M   → characters [N, M) (0-indexed, half-open)
+// Returns { wsName, filePath } or { wsName, filePath, range } when a range is parsed.
 export function parseTarget(target, forRead) {
   const firstColon = target.indexOf(':');
   if (firstColon === -1) return { error: 'Invalid target — expected format: wsName:/path' };
@@ -42,8 +43,8 @@ export function parseTarget(target, forRead) {
       const filePath = m[1] || '/';
       const start = parseInt(m[3]);
       const end = m[4] !== undefined ? parseInt(m[4]) : undefined;
-      if (m[2] === 'c') return { wsName, filePath, startChar: start, endChar: end };
-      return { wsName, filePath, startLine: start, endLine: end };
+      if (m[2] === 'c') return { wsName, filePath, range: { startChar: start, endChar: end } };
+      return { wsName, filePath, range: { startLine: start, endLine: end } };
     }
   }
   return { wsName, filePath: rest };
@@ -57,13 +58,13 @@ export function countFiles(node) {
 }
 
 // Read a file or list a directory.
-// Optionally return only a slice of a file:
-//   startLine/endLine — 1-indexed, inclusive. endLine omitted means "to end".
-//   startChar/endChar — 0-indexed, half-open [startChar, endChar). endChar
-//                       omitted means "to end". A character range takes
-//                       precedence over a line range when both are given.
+// An optional `range` enables returning only a slice of a file:
+//   { startLine, endLine } — 1-indexed, inclusive. endLine omitted means "to end".
+//   { startChar, endChar } — 0-indexed, half-open [startChar, endChar). endChar
+//                            omitted means "to end". A character range takes
+//                            precedence over a line range when both are given.
 // Returns { success: true, result: string } or { success: false, result: errorMessage }.
-export function jjfsRead(wsForKey, wsName, filePath, startLine, endLine, startChar, endChar) {
+export function jjfsRead(wsForKey, wsName, filePath, range) {
   const ws = wsForKey[wsName];
   if (!ws) return { success: false, result: `Workspace not found: ${wsName}` };
 
@@ -87,14 +88,14 @@ export function jjfsRead(wsForKey, wsName, filePath, startLine, endLine, startCh
   }
 
   let content = String(node);
-  if (startChar !== undefined) {
-    const from = Math.max(0, startChar);
-    const to = endChar !== undefined ? Math.min(content.length, endChar) : content.length;
+  if (range?.startChar !== undefined) {
+    const from = Math.max(0, range.startChar);
+    const to = range.endChar !== undefined ? Math.min(content.length, range.endChar) : content.length;
     content = content.slice(from, Math.max(from, to));
-  } else if (startLine !== undefined) {
+  } else if (range?.startLine !== undefined) {
     const allLines = content.split('\n');
-    const from = Math.max(0, startLine - 1);
-    const to = endLine !== undefined ? Math.min(allLines.length, endLine) : allLines.length;
+    const from = Math.max(0, range.startLine - 1);
+    const to = range.endLine !== undefined ? Math.min(allLines.length, range.endLine) : allLines.length;
     content = allLines.slice(from, Math.max(from, to)).join('\n');
   }
   return { success: true, result: content };
