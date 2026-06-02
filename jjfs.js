@@ -32,7 +32,7 @@ export function parseTarget(target, forRead) {
   if (!wsName) return { error: 'Workspace name cannot be empty' };
   const rest = target.slice(firstColon + 1) || '/';
   if (forRead) {
-    const m = rest.match(/^(.*):(\d+):(\d+)$/);
+    const m = rest.match(/^(.*):(\/d+):(\/d+)$/);
     if (m) return { wsName, filePath: m[1] || '/', startLine: parseInt(m[2]), endLine: parseInt(m[3]) };
   }
   return { wsName, filePath: rest };
@@ -253,6 +253,10 @@ export function getPermBitsForKey(perm, callerId) {
 // Session auth (callerId = null) always passes.
 export function checkWriteAccess(fsPerms, email, wsName, filePath, callerId) {
   if (!callerId) return { allowed: true };
+  // The _system workspace is read-only for all callers except internal updates
+  if (wsName === '_system' && callerId !== '__internal_system__') {
+    return { allowed: false, error: `Permission denied: _system workspace is read-only` };
+  }
   const perm = getEffectivePermission(fsPerms, email, wsName, filePath);
   const bits = getPermBitsForKey(perm, callerId);
   if (bits.write) return { allowed: true };
