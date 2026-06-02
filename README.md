@@ -74,11 +74,16 @@ Several places accept a **target** string that encodes both a workspace name and
 wsName:/path/to/file
 ```
 
-For range reads, a target may also encode line boundaries:
+For range reads, a target may also encode a slice suffix after the path:
 
-```
-wsName:/path/to/file:startLine:endLine
-```
+| Suffix form | Meaning |
+|-------------|---------|
+| `:N` | From line N to end of file (1-indexed) |
+| `:N:M` | Lines N through M inclusive (1-indexed) |
+| `:cN` | From character offset N to end of file (0-indexed) |
+| `:cN:M` | Characters [N, M) — 0-indexed, half-open |
+
+A character range (`:cN`) takes precedence over a line range when both are somehow present.
 
 ### Return shape
 
@@ -204,27 +209,29 @@ const { parent, name } = jjfsNavigate(ws, "/src/index.js");
 
 #### `parseTarget(target, forRead?)`
 
-Splits a target string of the form `wsName:/path` (or `wsName:/path:startLine:endLine`) into its components.
+Splits a target string of the form `wsName:/path` into its components. When `forRead` is `true`, also parses an optional slice suffix (see **Target format** above).
 
 **Parameters:**
 
 | Parameter | Type    | Description |
 |-----------|---------|-------------|
 | `target`  | string  | The target string to parse. |
-| `forRead` | boolean | When `true`, also attempts to parse an optional `:startLine:endLine` suffix. |
+| `forRead` | boolean | When `true`, also attempts to parse an optional slice suffix. |
 
 **Returns:**
 
 ```js
 { wsName: string, filePath: string }
-// with forRead:
-{ wsName: string, filePath: string, startLine: number, endLine: number }
+// with forRead and a line-range suffix:
+{ wsName: string, filePath: string, startLine: number, endLine?: number }
+// with forRead and a character-range suffix:
+{ wsName: string, filePath: string, startChar: number, endChar?: number }
 // on failure:
 { error: string }
 ```
 
 - Returns `{ error }` if there is no `:` separator or the workspace name is empty.
-- Line numbers in the range form are parsed as integers.
+- `endLine` / `endChar` are omitted (not set to `undefined`) when the suffix has only a start position.
 
 **Examples:**
 
@@ -234,6 +241,12 @@ parseTarget("default:/src/app.js");
 
 parseTarget("default:/src/app.js:10:20", true);
 // → { wsName: "default", filePath: "/src/app.js", startLine: 10, endLine: 20 }
+
+parseTarget("default:/src/app.js:10", true);
+// → { wsName: "default", filePath: "/src/app.js", startLine: 10 }
+
+parseTarget("default:/src/app.js:c40:80", true);
+// → { wsName: "default", filePath: "/src/app.js", startChar: 40, endChar: 80 }
 ```
 
 ---
@@ -267,7 +280,7 @@ countFiles({ "a.js": "x", src: { "b.js": "y", "c.js": "z" } });
 
 ---
 
-#### `jjfsRead(wsForKey, wsName, filePath, startLine?, endLine?)`
+#### `jjfsRead(wsForKey, wsName, filePath, startLine?, endLine?, startChar?, endChar?)`
 
 Reads a file's content or lists a directory's entries.
 
@@ -278,8 +291,10 @@ Reads a file's content or lists a directory's entries.
 | `wsForKey`  | object | The full workspace map. |
 | `wsName`    | string | Name of the workspace to read from. |
 | `filePath`  | string | Path to the file or directory. An empty string or `/` lists the workspace root. |
-| `startLine` | number | (optional) 1-based start line for a partial read. Requires `endLine`. |
-| `endLine`   | number | (optional) 1-based inclusive end line for a partial read. |
+| `startLine` | number | (optional) 1-based start line. Omitting `endLine` reads to end of file. |
+| `endLine`   | number | (optional) 1-based inclusive end line. |
+| `startChar` | number | (optional) 0-based start character offset. Omitting `endChar` reads to end of file. |
+| `endChar`   | number | (optional) 0-based exclusive end character offset (half-open range). |
 
 **Returns:** `{ success: boolean, result: string }`
 
@@ -287,7 +302,7 @@ Reads a file's content or lists a directory's entries.
 
 - If `filePath` is empty or `/`, returns a newline-separated listing of the workspace root. Directory entries are shown with a trailing `/`.
 - If `filePath` points to a directory, returns a listing of that directory's children (with trailing `/` on subdirectories).
-- If `filePath` points to a file, returns the full file content as a string. If `startLine`/`endLine` are given, only those lines (1-based, inclusive) are returned. Line numbers are clamped to the actual file length.
+- If `filePath` points to a file, returns the full file content. When a range is supplied, only that slice is returned. A character range (`startChar`) takes precedence over a line range (`startLine`) when both are given. Range boundaries are clamped to the actual file length.
 - Returns `{ success: false }` if the workspace, path, or intermediate directory does not exist.
 
 **Examples:**
@@ -299,15 +314,21 @@ jjfsRead(wsForKey, "default", "/");
 jjfsRead(wsForKey, "default", "/src/index.js");
 // → { success: true, result: "console.log('hi')" }
 
+// Lines 2–5 (1-indexed, inclusive):
 jjfsRead(wsForKey, "default", "/src/index.js", 2, 5);
-// → { success: true, result: "lines 2–5 of the file" }
+
+// From line 10 to end of file:
+jjfsRead(wsForKey, "default", "/src/index.js", 10);
+
+// Characters 40–79 (0-indexed, half-open):
+jjfsRead(wsForKey, "default", "/src/index.js", undefined, undefined, 40, 80);
 ```
 
 ---
 
-#### `jjfsWrite(wsForKey, wsName, filePath, content)`
+#### `jjfsWrite(wsForKey, wsName, filePath, content, range?)`
 
-Creates or overwrites a file. Automatically creates any missing intermediate directories along the path.
+Creates or overwrites a file. Automatically creates any missing intermediate directories along the path. When `range` is supplied, performs a **partial (splice) write** instead of a full overwrite.
 
 **Parameters:**
 
@@ -316,11 +337,26 @@ Creates or overwrites a file. Automatically creates any missing intermediate dir
 | `wsForKey` | object | The full workspace map. |
 | `wsName`   | string | Name of the target workspace. |
 | `filePath` | string | Absolute or relative path to the file. Cannot be `/` or empty. |
-| `content`  | any    | The value to store. Typically a string for text files; can be any value (e.g. an object when cloning directories via `jjfsMove`/`jjfsCopy`). |
+| `content`  | any    | The value to store. Typically a string for text files; must be a string for ranged writes. Can be any JSON-serializable value when cloning directories via `jjfsMove`/`jjfsCopy`. |
+| `range`    | object | (optional) Splice descriptor — see below. |
+
+**`range` options:**
+
+| Shape | Behavior |
+|-------|----------|
+| `{ startLine, endLine }` | Replace lines `startLine`–`endLine` (1-indexed, inclusive) with `content`. |
+| `{ startLine }` | Insert `content` before line `startLine` (no lines deleted). |
+| `{ startChar, endChar }` | Replace characters `[startChar, endChar)` (0-indexed, half-open) with `content`. |
+| `{ startChar }` | Insert `content` at character offset `startChar` (no characters deleted). |
+
+A character range takes precedence over a line range when both keys are present. Ranged writes treat a missing file as empty (an insert can create the file). Line indices are padded with empty lines if they extend past the current end of file.
 
 **Returns:** `{ success: boolean, result: string }`
 
-- On success: `result` is `"Created: wsName:/path"` or `"Overwrote: wsName:/path"`.
+- Full write — new file: `"Created: wsName:/path"`
+- Full write — existing file: `"Overwrote: wsName:/path"`
+- Ranged write — new file: `"Created: wsName:/path"`
+- Ranged write — existing file: `"Updated: wsName:/path"`
 - On failure: `result` describes the conflict or invalid input.
 
 **Errors:**
@@ -331,13 +367,26 @@ Creates or overwrites a file. Automatically creates any missing intermediate dir
 | Path is `/` or empty | `"Cannot write to workspace root"` |
 | An intermediate segment is a file, not a directory | `"Path conflict: /partial/path is a file, not a directory"` |
 | Target path is an existing directory | `"Path conflict: {filePath} is a directory"` |
+| `range` given but `content` is not a string | `"Ranged write requires string content"` |
+| Invalid line range (`startLine < 1` or `endLine < startLine`) | `"Invalid line range for: {filePath}"` |
+| Invalid character range (`startChar < 0` or `endChar < startChar`) | `"Invalid character range for: {filePath}"` |
 
-**Example:**
+**Examples:**
 
 ```js
+// Full overwrite (creates intermediate dirs automatically):
 jjfsWrite(wsForKey, "default", "/src/utils/math.js", "export const add = (a,b)=>a+b;");
-// Creates wsForKey.default.src.utils["math.js"] = "..."
-// Also creates intermediate objects if src/ or utils/ didn't exist.
+// → { success: true, result: "Created: default:/src/utils/math.js" }
+
+// Replace lines 3–5 with new content:
+jjfsWrite(wsForKey, "default", "/src/index.js", "// replaced\n", { startLine: 3, endLine: 5 });
+// → { success: true, result: "Updated: default:/src/index.js" }
+
+// Insert a line before line 2:
+jjfsWrite(wsForKey, "default", "/src/index.js", "// inserted\n", { startLine: 2 });
+
+// Splice characters 10–19 (replacing 10 chars starting at offset 10):
+jjfsWrite(wsForKey, "default", "/src/index.js", "REPLACED", { startChar: 10, endChar: 20 });
 ```
 
 ---
@@ -613,6 +662,8 @@ Decodes the read/write/execute bits from a permission entry for a specific calle
 #### `checkWriteAccess(fsPerms, email, wsName, filePath, callerId)`
 
 Checks whether `callerId` has write permission on a path. Session auth (`callerId === null`) always passes.
+
+**Special case:** the `_system` workspace is **read-only** for all API-key callers. Any non-null `callerId` is denied with `"Permission denied: _system workspace is read-only"` regardless of what `fsPerms` contains.
 
 **Returns:** `{ allowed: true }` or `{ allowed: false, error: string }`
 
