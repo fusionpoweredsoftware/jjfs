@@ -253,6 +253,10 @@ export function getPermBitsForKey(perm, callerId) {
 // Session auth (callerId = null) always passes.
 export function checkWriteAccess(fsPerms, email, wsName, filePath, callerId) {
   if (!callerId) return { allowed: true };
+  // The _system workspace is read-only for all callers except internal updates
+  if (wsName === '_system' && callerId !== '__internal_system__') {
+    return { allowed: false, error: `Permission denied: _system workspace is read-only` };
+  }
   const perm = getEffectivePermission(fsPerms, email, wsName, filePath);
   const bits = getPermBitsForKey(perm, callerId);
   if (bits.write) return { allowed: true };

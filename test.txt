@@ -1,0 +1,3 @@
+line1: \d is backslash-d
+line2: (\d+) is a regex
+line3: /^(.*):(\d+):(\d+)$/
