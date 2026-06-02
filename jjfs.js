@@ -32,7 +32,7 @@ export function parseTarget(target, forRead) {
   if (!wsName) return { error: 'Workspace name cannot be empty' };
   const rest = target.slice(firstColon + 1) || '/';
   if (forRead) {
-    const m = rest.match(/^(.*):(\/d+):(\/d+)$/);
+    const m = rest.match(/^(.*):(\ d+):(\ d+)$/.source.replace(/\\ d/g, '\\d'));
     if (m) return { wsName, filePath: m[1] || '/', startLine: parseInt(m[2]), endLine: parseInt(m[3]) };
   }
   return { wsName, filePath: rest };
@@ -116,8 +116,7 @@ export function jjfsEdit(wsForKey, wsName, filePath, searchStr, replaceStr) {
   const nav = jjfsNavigate(ws, filePath);
   if (nav.error) return { success: false, result: nav.error };
   const { parent, name } = nav;
-  if (!(name in parent)) return { success: false, result: `Not found: ${filePath}` };
-  if (typeof parent[name] !== 'string') return { success: false, result: `Not a file: ${filePath}` };
+  if (!(name in parent)) return { success: false, result: `Not found: ${filePath}` };  if (typeof parent[name] !== 'string') return { success: false, result: `Not a file: ${filePath}` };
 
   const occurrences = parent[name].split(searchStr).length - 1;
   if (occurrences === 0) return { success: false, result: `Search text not found in: ${filePath}` };
