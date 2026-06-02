@@ -24,7 +24,12 @@ export function jjfsNavigate(workspace, pathStr) {
   return { parent: node, name: parts[parts.length - 1] };
 }
 
-// Parse "wsName:/path" (or "wsName:/path:startLine:endLine" for JJFS_READ) from target.
+// Parse "wsName:/path" from target. For JJFS_READ, an optional range suffix is
+// also parsed:
+//   :N      → from line N to end of file
+//   :N:M    → lines N through M (1-indexed, inclusive)
+//   :cN     → from character N to end of file
+//   :cN:M   → characters [N, M) (0-indexed, half-open)
 export function parseTarget(target, forRead) {
   const firstColon = target.indexOf(':');
   if (firstColon === -1) return { error: 'Invalid target — expected format: wsName:/path' };
@@ -32,8 +37,14 @@ export function parseTarget(target, forRead) {
   if (!wsName) return { error: 'Workspace name cannot be empty' };
   const rest = target.slice(firstColon + 1) || '/';
   if (forRead) {
-    const m = rest.match(/^(.*):(\d+):(\d+)$/);
-    if (m) return { wsName, filePath: m[1] || '/', startLine: parseInt(m[2]), endLine: parseInt(m[3]) };
+    const m = rest.match(/^(.*?):(c?)(\d+)(?::(\d+))?$/);
+    if (m) {
+      const filePath = m[1] || '/';
+      const start = parseInt(m[3]);
+      const end = m[4] !== undefined ? parseInt(m[4]) : undefined;
+      if (m[2] === 'c') return { wsName, filePath, startChar: start, endChar: end };
+      return { wsName, filePath, startLine: start, endLine: end };
+    }
   }
   return { wsName, filePath: rest };
 }
@@ -46,8 +57,13 @@ export function countFiles(node) {
 }
 
 // Read a file or list a directory.
+// Optionally return only a slice of a file:
+//   startLine/endLine — 1-indexed, inclusive. endLine omitted means "to end".
+//   startChar/endChar — 0-indexed, half-open [startChar, endChar). endChar
+//                       omitted means "to end". A character range takes
+//                       precedence over a line range when both are given.
 // Returns { success: true, result: string } or { success: false, result: errorMessage }.
-export function jjfsRead(wsForKey, wsName, filePath, startLine, endLine) {
+export function jjfsRead(wsForKey, wsName, filePath, startLine, endLine, startChar, endChar) {
   const ws = wsForKey[wsName];
   if (!ws) return { success: false, result: `Workspace not found: ${wsName}` };
 
@@ -71,15 +87,32 @@ export function jjfsRead(wsForKey, wsName, filePath, startLine, endLine) {
   }
 
   let content = String(node);
-  if (startLine !== undefined && endLine !== undefined) {
+  if (startChar !== undefined) {
+    const from = Math.max(0, startChar);
+    const to = endChar !== undefined ? Math.min(content.length, endChar) : content.length;
+    content = content.slice(from, Math.max(from, to));
+  } else if (startLine !== undefined) {
     const allLines = content.split('\n');
-    content = allLines.slice(Math.max(0, startLine - 1), Math.min(allLines.length, endLine)).join('\n');
+    const from = Math.max(0, startLine - 1);
+    const to = endLine !== undefined ? Math.min(allLines.length, endLine) : allLines.length;
+    content = allLines.slice(from, Math.max(from, to)).join('\n');
   }
   return { success: true, result: content };
 }
 
 // Create or overwrite a file. Creates intermediate directories automatically.
-export function jjfsWrite(wsForKey, wsName, filePath, content) {
+//
+// An optional `range` enables a partial write instead of a full overwrite,
+// splicing `content` (a string) into the existing file:
+//   { startLine, endLine } — replace lines startLine..endLine (1-indexed,
+//                            inclusive) with content.
+//   { startLine }          — insert content before line startLine.
+//   { startChar, endChar } — replace characters [startChar, endChar) (0-indexed,
+//                            half-open) with content.
+//   { startChar }          — insert content at character offset startChar.
+// A character range takes precedence over a line range when both are given.
+// Ranged writes treat a missing file as empty, so an insert can create a file.
+export function jjfsWrite(wsForKey, wsName, filePath, content, range) {
   const ws = wsForKey[wsName];
   if (!ws) return { success: false, result: `Workspace not found: ${wsName}` };
   if (!filePath || filePath === '/') return { success: false, result: 'Cannot write to workspace root' };
@@ -100,9 +133,42 @@ export function jjfsWrite(wsForKey, wsName, filePath, content) {
   }
 
   const name = parts[parts.length - 1];
-  if (typeof node[name] === 'object' && typeof content !== 'object') {
+  if (typeof node[name] === 'object' && node[name] !== null && typeof content !== 'object') {
     return { success: false, result: `Path conflict: ${filePath} is a directory` };
   }
+
+  // Partial (ranged) write — splice content into the existing file.
+  const hasRange = range && (range.startLine !== undefined || range.startChar !== undefined);
+  if (hasRange) {
+    if (typeof content !== 'string') {
+      return { success: false, result: 'Ranged write requires string content' };
+    }
+    const base = name in node ? String(node[name]) : '';
+    let updated;
+    if (range.startChar !== undefined) {
+      if (range.startChar < 0 || (range.endChar !== undefined && range.endChar < range.startChar)) {
+        return { success: false, result: `Invalid character range for: ${filePath}` };
+      }
+      const from = Math.min(range.startChar, base.length);
+      const to = range.endChar !== undefined ? Math.min(range.endChar, base.length) : from;
+      updated = base.slice(0, from) + content + base.slice(to);
+    } else {
+      if (range.startLine < 1 || (range.endLine !== undefined && range.endLine < range.startLine)) {
+        return { success: false, result: `Invalid line range for: ${filePath}` };
+      }
+      const lines = base === '' ? [] : base.split('\n');
+      const startIdx = range.startLine - 1;
+      // Pad with empty lines so an insert/replace past EOF still lands cleanly.
+      while (lines.length < startIdx) lines.push('');
+      const deleteCount = range.endLine !== undefined ? (range.endLine - range.startLine + 1) : 0;
+      lines.splice(startIdx, deleteCount, ...content.split('\n'));
+      updated = lines.join('\n');
+    }
+    const existed = name in node;
+    node[name] = updated;
+    return { success: true, result: `${existed ? 'Updated' : 'Created'}: ${wsName}:${filePath}` };
+  }
+
   const existed = name in node;
   node[name] = content;
   return { success: true, result: `${existed ? 'Overwrote' : 'Created'}: ${wsName}:${filePath}` };
