@@ -223,15 +223,15 @@ Splits a target string of the form `wsName:/path` into its components. When `for
 ```js
 { wsName: string, filePath: string }
 // with forRead and a line-range suffix:
-{ wsName: string, filePath: string, startLine: number, endLine?: number }
+{ wsName: string, filePath: string, range: { startLine: number, endLine?: number } }
 // with forRead and a character-range suffix:
-{ wsName: string, filePath: string, startChar: number, endChar?: number }
+{ wsName: string, filePath: string, range: { startChar: number, endChar?: number } }
 // on failure:
 { error: string }
 ```
 
 - Returns `{ error }` if there is no `:` separator or the workspace name is empty.
-- `endLine` / `endChar` are omitted (not set to `undefined`) when the suffix has only a start position.
+- The `range` object is only present when a slice suffix is parsed; `endLine` / `endChar` within it are omitted (not set to `undefined`) when the suffix has only a start position. The shape matches the `range` accepted by `jjfsRead` and `jjfsWrite`.
 
 **Examples:**
 
@@ -240,13 +240,13 @@ parseTarget("default:/src/app.js");
 // → { wsName: "default", filePath: "/src/app.js" }
 
 parseTarget("default:/src/app.js:10:20", true);
-// → { wsName: "default", filePath: "/src/app.js", startLine: 10, endLine: 20 }
+// → { wsName: "default", filePath: "/src/app.js", range: { startLine: 10, endLine: 20 } }
 
 parseTarget("default:/src/app.js:10", true);
-// → { wsName: "default", filePath: "/src/app.js", startLine: 10 }
+// → { wsName: "default", filePath: "/src/app.js", range: { startLine: 10 } }
 
 parseTarget("default:/src/app.js:c40:80", true);
-// → { wsName: "default", filePath: "/src/app.js", startChar: 40, endChar: 80 }
+// → { wsName: "default", filePath: "/src/app.js", range: { startChar: 40, endChar: 80 } }
 ```
 
 ---
@@ -280,21 +280,18 @@ countFiles({ "a.js": "x", src: { "b.js": "y", "c.js": "z" } });
 
 ---
 
-#### `jjfsRead(wsForKey, wsName, filePath, startLine?, endLine?, startChar?, endChar?)`
+#### `jjfsRead(wsForKey, wsName, filePath, range?)`
 
 Reads a file's content or lists a directory's entries.
 
 **Parameters:**
 
-| Parameter   | Type   | Description |
-|-------------|--------|-------------|
-| `wsForKey`  | object | The full workspace map. |
-| `wsName`    | string | Name of the workspace to read from. |
-| `filePath`  | string | Path to the file or directory. An empty string or `/` lists the workspace root. |
-| `startLine` | number | (optional) 1-based start line. Omitting `endLine` reads to end of file. |
-| `endLine`   | number | (optional) 1-based inclusive end line. |
-| `startChar` | number | (optional) 0-based start character offset. Omitting `endChar` reads to end of file. |
-| `endChar`   | number | (optional) 0-based exclusive end character offset (half-open range). |
+| Parameter  | Type   | Description |
+|------------|--------|-------------|
+| `wsForKey` | object | The full workspace map. |
+| `wsName`   | string | Name of the workspace to read from. |
+| `filePath` | string | Path to the file or directory. An empty string or `/` lists the workspace root. |
+| `range`    | object | (optional) A slice to return instead of the whole file. Same shape as `jjfsWrite`'s `range`: `{ startLine, endLine? }` (1-based, inclusive; omit `endLine` to read to end) or `{ startChar, endChar? }` (0-based, half-open `[startChar, endChar)`; omit `endChar` to read to end). |
 
 **Returns:** `{ success: boolean, result: string }`
 
@@ -302,7 +299,7 @@ Reads a file's content or lists a directory's entries.
 
 - If `filePath` is empty or `/`, returns a newline-separated listing of the workspace root. Directory entries are shown with a trailing `/`.
 - If `filePath` points to a directory, returns a listing of that directory's children (with trailing `/` on subdirectories).
-- If `filePath` points to a file, returns the full file content. When a range is supplied, only that slice is returned. A character range (`startChar`) takes precedence over a line range (`startLine`) when both are given. Range boundaries are clamped to the actual file length.
+- If `filePath` points to a file, returns the full file content. When a `range` is supplied, only that slice is returned. A character range (`range.startChar`) takes precedence over a line range (`range.startLine`) when both are given. Range boundaries are clamped to the actual file length.
 - Returns `{ success: false }` if the workspace, path, or intermediate directory does not exist.
 
 **Examples:**
@@ -315,13 +312,13 @@ jjfsRead(wsForKey, "default", "/src/index.js");
 // → { success: true, result: "console.log('hi')" }
 
 // Lines 2–5 (1-indexed, inclusive):
-jjfsRead(wsForKey, "default", "/src/index.js", 2, 5);
+jjfsRead(wsForKey, "default", "/src/index.js", { startLine: 2, endLine: 5 });
 
 // From line 10 to end of file:
-jjfsRead(wsForKey, "default", "/src/index.js", 10);
+jjfsRead(wsForKey, "default", "/src/index.js", { startLine: 10 });
 
 // Characters 40–79 (0-indexed, half-open):
-jjfsRead(wsForKey, "default", "/src/index.js", undefined, undefined, 40, 80);
+jjfsRead(wsForKey, "default", "/src/index.js", { startChar: 40, endChar: 80 });
 ```
 
 ---
